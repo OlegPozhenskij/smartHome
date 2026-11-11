@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Голосовой дом</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
+<style>
+  :root{
+    --bg:#0d0e1a; --panel:#171a2e; --panel2:#1f2340; --line:#2c315a;
+    --text:#eef0ff; --muted:#9aa0c9;
+    --violet:#8b7bff; --pink:#ff6fae; --cyan:#4be1ec; --warm:#ffc857; --green:#6ee7a0;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:16px; line-height:1.5;
+    background-image:radial-gradient(900px 500px at 15% -10%, rgba(139,123,255,.22), transparent 60%),
+                     radial-gradient(700px 400px at 100% 0%, rgba(255,111,174,.14), transparent 60%);
+    background-repeat:no-repeat; min-height:100vh;
+  }
+  header{max-width:1240px; margin:0 auto; padding:28px 16px 8px}
+  h1{font-family:Unbounded,Manrope,sans-serif; font-weight:800; font-size:clamp(26px,4.4vw,44px); margin:0; letter-spacing:-.01em; line-height:1.1}
+  h1 span{background:linear-gradient(90deg,var(--cyan),var(--violet) 50%,var(--pink)); -webkit-background-clip:text; background-clip:text; color:transparent}
+  header p{margin:10px 0 0; color:var(--muted); max-width:60ch}
+  main{max-width:1240px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns:minmax(0,1fr); align-items:start}
+  @media (max-width:940px){ main{grid-template-columns:1fr} }
+
+  /* ---------- сцена ---------- */
+  .stage{background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:12px}
+  @media (max-width:940px){ .stage{position:static} }
+  .room-wrap{position:relative; border-radius:14px; overflow:hidden; background:#23264a}
+  .room-scroll{overflow-x:auto}
+  svg#room{display:block; width:100%; min-width:720px; height:auto}
+  .heard{
+    position:absolute; left:50%; top:12px; transform:translateX(-50%);
+    background:rgba(13,14,26,.78); backdrop-filter:blur(6px); border:1px solid var(--line);
+    padding:7px 16px; border-radius:999px; font-weight:800; font-size:15px; white-space:nowrap; max-width:92%;
+    overflow:hidden; text-overflow:ellipsis; transition:border-color .2s, box-shadow .2s;
+  }
+  .heard.flash{border-color:var(--green); box-shadow:0 0 0 4px rgba(110,231,160,.22)}
+  .chips{display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-top:12px}
+  @media (max-width:940px){ .chips{grid-template-columns:repeat(4,1fr)} }
+  @media (max-width:560px){ .chips{grid-template-columns:repeat(2,1fr)} }
+  .chip{
+    font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:14px;
+    padding:10px 8px; cursor:pointer; text-align:left; display:flex; flex-direction:column; gap:2px; transition:.2s;
+  }
+  .chip b{font-size:15px}
+  .chip small{color:var(--muted); font-size:12.5px}
+  .chip:hover{border-color:var(--violet)}
+  .chip[aria-pressed="true"]{background:linear-gradient(135deg,rgba(139,123,255,.35),rgba(75,225,236,.2)); border-color:var(--cyan)}
+  .chip[aria-pressed="true"] small{color:var(--green)}
+  .chip.stop{align-items:center; justify-content:center; text-align:center; border-color:rgba(255,111,174,.5)}
+  .chip.stop:hover{background:rgba(255,111,174,.16)}
+  .tip{color:var(--muted); font-size:13px; margin:10px 4px 2px}
+
+  /* состояния комнаты */
+  .dark{transition:opacity .6s}
+  .warmlight,.cone{opacity:0; transition:opacity .6s}
+  .bulb{fill:#6b6f96; transition:fill .4s}
+  .on-light .dark{opacity:0}
+  .on-light .warmlight,.on-light .cone{opacity:1}
+  .on-light .bulb{fill:#ffe08a; filter:drop-shadow(0 0 10px #ffd27a)}
+
+  .fan-blades{transform-origin:340px 240px}
+  .on-fan .fan-blades{animation:spin .45s linear infinite}
+  .wind{opacity:0; stroke-dasharray:14 10; transition:opacity .4s}
+  .on-fan .wind{opacity:.75; animation:dash .6s linear infinite}
+  .curtain{transform-origin:200px 62px}
+  .on-fan .curtain{animation:sway 1.5s ease-in-out infinite alternate}
+
+  .tv-film{opacity:0; transition:opacity .5s}
+  .on-tv .tv-film{opacity:1}
+  .on-tv .tv-glow{filter:drop-shadow(0 0 16px rgba(255,111,174,.65))}
+  .on-tv .hills{animation:scroll 3s linear infinite}
+  .on-tv .hills2{animation:scroll 5s linear infinite}
+  .led{fill:#ff4d6d} .on-tv .led{fill:#6ee7a0}
+
+  .eq rect{transform-box:fill-box; transform-origin:center bottom; transform:scaleY(.12); fill:#4be1ec}
+  .on-music .eq rect{animation:eq .42s ease-in-out infinite alternate}
+  .eq rect:nth-child(2){animation-delay:.12s!important} .eq rect:nth-child(3){animation-delay:.27s!important}
+  .eq rect:nth-child(4){animation-delay:.05s!important} .eq rect:nth-child(5){animation-delay:.2s!important}
+  .sp-cone{transform-box:fill-box; transform-origin:center}
+  .on-music .sp-cone{animation:pulse .27s ease-in-out infinite alternate}
+  .note{opacity:0; font-size:26px; font-weight:800}
+  .on-music .note{animation:float 2.4s ease-in infinite}
+  .note.n2{animation-delay:.8s!important} .note.n3{animation-delay:1.5s!important} .note.n4{animation-delay:.4s!important}
+
+  /* погода за окном */
+  .sky,.wx{opacity:0; transition:opacity .9s}
+  .w-clear .s-clear,.w-clear .wx-clear,
+  .w-snow .s-snow,.w-snow .wx-snow,.w-snow .wx-cloud,.w-snow .wx-frost,
+  .w-rain .s-rain,.w-rain .wx-rain,.w-rain .wx-cloud,
+  .w-hot .s-hot,.w-hot .wx-hot{opacity:1}
+  .land{fill:#161a45; transition:fill .9s}
+  .w-snow .land{fill:#eef3fb} .w-rain .land{fill:#10142c} .w-hot .land{fill:#d9963f}
+  .wx-cloud{fill:#7f88a3; animation:drift 7s ease-in-out infinite alternate}
+  .w-snow .wx-cloud{fill:#dfe6f3}
+  .wx-rain line{stroke:#bfe3ff; stroke-width:2; stroke-linecap:round; animation:rainfall .7s linear infinite paused}
+  .wx-snow circle{fill:#fff; animation:snowfall 4s linear infinite paused}
+  .w-rain .wx-rain line,.w-snow .wx-snow circle{animation-play-state:running}
+  .sunrays{transform-origin:275px 118px; animation:spin 16s linear infinite}
+  .rainbow{opacity:0; transition:opacity 1.4s}
+  .rainbow-on .rainbow{opacity:.9}
+  .dimmable{filter:brightness(.5); transition:filter .6s}
+  .on-light .dimmable{filter:brightness(1)}
+  .th-ring{stroke:#6ee7a0; transition:stroke .6s}
+  .w-snow .th-ring{stroke:#4be1ec} .w-rain .th-ring{stroke:#8b7bff} .w-hot .th-ring{stroke:#ff6fae}
+
+  /* робот-пылесос и кот */
+  .rled{fill:#ff4d6d}
+  .on-vac .rled{fill:#6ee7a0; animation:blink .8s steps(2) infinite}
+  .cat-ride{opacity:0; transition:opacity .4s} .cat-sofa{transition:opacity .4s}
+  .on-vac .cat-ride{opacity:1} .on-vac .cat-sofa{opacity:0}
+  .mark{fill:none; stroke:#ffc857; stroke-width:2.5; stroke-dasharray:6 4; opacity:0; transition:opacity .2s; pointer-events:none}
+  .mark.show{opacity:1; animation:dash .6s linear infinite}
+  #floorHit{cursor:pointer}
+
+  /* диско */
+  .disco-ball{transform:translateY(-112px); transition:transform .7s cubic-bezier(.3,1.4,.5,1)}
+  .on-disco .disco-ball{transform:translateY(0)}
+  .disco-beams{opacity:0; transition:opacity .5s; transform-origin:772px 74px; mix-blend-mode:screen; pointer-events:none}
+  .on-disco .disco-beams{opacity:.5; animation:spin 7s linear infinite}
+  .disco-tint{opacity:0; fill:#ff6fae; pointer-events:none; mix-blend-mode:screen; transition:opacity .5s}
+  .on-disco .disco-tint{opacity:.16; animation:hue 2.4s steps(1) infinite}
+
+  /* невесомость */
+  .fl{transform-box:fill-box; transform-origin:center}
+  .on-zero .fl{animation:lift 1.4s ease-out forwards, bob var(--fd,3.2s) ease-in-out 1.4s infinite alternate}
+
+  @keyframes drift{from{transform:translateX(-12px)}to{transform:translateX(14px)}}
+  @keyframes rainfall{to{transform:translate(-64px,232px)}}
+  @keyframes snowfall{0%{transform:translate(0,0)}50%{transform:translate(14px,108px)}100%{transform:translate(-4px,218px)}}
+  @keyframes blink{50%{opacity:.3}}
+  @keyframes hue{0%{fill:#ff6fae}25%{fill:#4be1ec}50%{fill:#ffc857}75%{fill:#8b7bff}}
+  @keyframes lift{to{transform:translate(0,var(--fy)) rotate(var(--fr))}}
+  @keyframes bob{from{transform:translate(0,var(--fy)) rotate(var(--fr))}to{transform:translate(10px,calc(var(--fy) - 18px)) rotate(calc(var(--fr) * -1))}}
+  @media (prefers-reduced-motion:reduce){
+    .on-disco .disco-beams,.on-disco .disco-tint,.sunrays,.wx-cloud{animation:none}
+    .on-zero .fl{animation:lift 1.4s ease-out forwards}
+  }
+
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes dash{to{stroke-dashoffset:-24}}
+  @keyframes sway{from{transform:skewX(-2deg)}to{transform:skewX(5deg)}}
+  @keyframes scroll{to{transform:translateX(-115px)}}
+  @keyframes eq{to{transform:scaleY(1)}}
+  @keyframes pulse{to{transform:scale(1.18)}}
+  @keyframes float{0%{opacity:0; transform:translateY(0)}15%{opacity:1}100%{opacity:0; transform:translateY(-90px) rotate(14deg)}}
+  @media (prefers-reduced-motion:reduce){
+    .on-fan .fan-blades{animation-duration:3s}
+    .on-fan .curtain,.on-music .note,.on-music .sp-cone{animation:none}
+    .on-music .note{opacity:1}
+  }
+
+  /* ---------- панель ---------- */
+  .panel{display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); align-items:start}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:18px}
+  .card h2{font-family:Unbounded,Manrope,sans-serif; font-size:15px; font-weight:600; margin:0 0 12px; display:flex; align-items:center; gap:10px}
+  .num{width:26px; height:26px; border-radius:50%; background:var(--violet); color:#0d0e1a; display:inline-grid; place-items:center; font-size:13px; font-weight:800; flex:none}
+  .card p{margin:0 0 10px; color:var(--muted); font-size:14.5px}
+  input[type=url]{
+    width:100%; font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--line);
+    border-radius:12px; padding:12px 14px; outline:none;
+  }
+  input[type=url]:focus{border-color:var(--violet); box-shadow:0 0 0 3px rgba(139,123,255,.25)}
+  .btn{
+    font:inherit; font-weight:800; color:#0d0e1a; background:linear-gradient(90deg,var(--cyan),var(--violet));
+    border:0; border-radius:12px; padding:12px 16px; cursor:pointer; width:100%; margin-top:10px; transition:.15s;
+  }
+  .btn:hover{filter:brightness(1.1)} .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.45; cursor:not-allowed; filter:none}
+  .btn.live{background:linear-gradient(90deg,var(--pink),#ff9a6f)}
+  .status{font-size:14px; margin-top:10px; min-height:21px; color:var(--muted)}
+  .status.ok{color:var(--green)} .status.err{color:#ff8fa3}
+  .words{display:flex; flex-wrap:wrap; gap:8px; margin:0; padding:0; list-style:none}
+  .words li{background:var(--panel2); border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:14px}
+  .words b{color:var(--cyan)}
+  .rows{display:grid; gap:10px}
+  .row{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 10px; align-items:center}
+  .row .name{font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .row select{font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:5px 8px; max-width:170px}
+  .bar{grid-column:1/-1; height:10px; border-radius:99px; background:var(--bg); overflow:hidden; position:relative}
+  .bar i{display:block; height:100%; width:0; border-radius:99px; background:linear-gradient(90deg,var(--violet),var(--cyan)); transition:width .18s}
+  .row.top .bar i{background:linear-gradient(90deg,var(--green),var(--cyan))}
+  .row .pct{font-variant-numeric:tabular-nums; color:var(--muted); font-size:13px; font-weight:600; margin-left:8px}
+  .empty{color:var(--muted); font-size:14.5px; border:1px dashed var(--line); border-radius:14px; padding:14px}
+  .setting{display:flex; align-items:center; gap:12px; margin-top:14px; font-size:14.5px}
+  .setting input[type=range]{flex:1; accent-color:var(--violet)}
+  .setting output{font-variant-numeric:tabular-nums; font-weight:800; min-width:44px; text-align:right}
+  .setting input[type=checkbox]{width:18px; height:18px; accent-color:var(--violet)}
+  .log{list-style:none; margin:12px 0 0; padding:0; display:grid; gap:6px; font-size:14px; color:var(--muted)}
+  .log li:first-child{color:var(--text)}
+  /* ---------- игра ---------- */
+  .game-sec{max-width:1240px; margin:0 auto; padding:0 16px 16px}
+  .game-head{display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; margin-bottom:12px}
+  .game-head h2{margin:0}
+  .pace{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13.5px; color:var(--muted)}
+  .pace button{font:inherit; font-size:13.5px; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:999px; padding:5px 12px; cursor:pointer}
+  .pace button[aria-pressed="true"]{border-color:var(--cyan); background:rgba(75,225,236,.16)}
+  .game-wrap{border-radius:14px; overflow:hidden; background:#0b0d2a; line-height:0}
+  canvas#game{display:block; width:100%; height:auto; aspect-ratio:3/1; touch-action:manipulation; cursor:pointer}
+  .pads{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:12px 0}
+  .pad{
+    font:inherit; font-weight:800; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:14px;
+    padding:12px 8px; cursor:pointer; user-select:none; -webkit-user-select:none; touch-action:manipulation; transition:.15s;
+  }
+  .pad small{display:block; font-weight:600; font-size:12.5px; color:var(--muted)}
+  .pad:hover{border-color:var(--violet)}
+  .pad:active{background:rgba(139,123,255,.3); transform:translateY(1px)}
+
+  footer{max-width:1240px; margin:0 auto; padding:6px 16px 30px; color:var(--muted); font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Голосовой <span>дом</span></h1>
+  <p>Подключи свою нейросеть из Teachable Machine и управляй комнатой голосом. Как ты её обучил, так она и будет слушаться.</p>
+</header>
+
+<main>
+  <!-- ================= СЦЕНА ================= -->
+  <section class="stage w-clear" id="stage">
+    <div class="room-wrap">
+      <div class="heard" id="heard">Модель ещё не подключена</div>
+      <div class="room-scroll">
+      <svg id="room" viewBox="0 0 1200 500" role="img" aria-label="Комната с лампой, колонками, вентилятором, телевизором, термостатом, диско-шаром, котом и роботом-пылесосом">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141a55"/><stop offset="1" stop-color="#4d2f80"/></linearGradient>
+          <linearGradient id="skySnow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#55668f"/><stop offset="1" stop-color="#c3d1ea"/></linearGradient>
+          <linearGradient id="skyRain" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#171c30"/><stop offset="1" stop-color="#4a556f"/></linearGradient>
+          <linearGradient id="skyHot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f9dff"/><stop offset="1" stop-color="#ffe2a0"/></linearGradient>
+          <radialGradient id="frostG"><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#eaf5ff" stop-opacity=".8"/></radialGradient>
+          <radialGradient id="warm" cx="600" cy="120" r="620" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffd27a" stop-opacity=".5"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></radialGradient>
+          <linearGradient id="coneG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a8" stop-opacity=".5"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/></linearGradient>
+          <linearGradient id="film" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b2a8f"/><stop offset=".6" stop-color="#ff6fae"/><stop offset="1" stop-color="#ffc857"/></linearGradient>
+          <radialGradient id="ballG" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#7d82b8"/></radialGradient>
+          <clipPath id="screenClip"><rect x="500" y="118" width="230" height="130" rx="6"/></clipPath>
+          <clipPath id="winClip"><rect x="70" y="70" width="260" height="200" rx="8"/></clipPath>
+          <g id="cat">
+            <path d="M-12 -3q-12-1-10-14" fill="none" stroke="#ffb86b" stroke-width="4" stroke-linecap="round"/>
+            <ellipse cx="0" cy="-8" rx="13" ry="9" fill="#ffb86b"/>
+            <circle cx="10" cy="-19" r="8" fill="#ffb86b"/>
+            <path d="M3 -23l1-9 6 5zM11 -27l6-5v9z" fill="#ffb86b"/>
+            <circle cx="8" cy="-20" r="1.3" fill="#262a52"/><circle cx="13.5" cy="-20" r="1.3" fill="#262a52"/>
+          </g>
+        </defs>
+
+        <!-- стены и пол -->
+        <rect width="1200" height="390" fill="#262a52"/>
+        <rect y="390" width="1200" height="110" fill="#1a1c38"/>
+        <rect y="384" width="1200" height="8" fill="#343972"/>
+        <ellipse cx="600" cy="446" rx="235" ry="38" fill="#3d3175"/>
+        <ellipse cx="600" cy="446" rx="190" ry="28" fill="none" stroke="#5a4bd1" stroke-width="3" stroke-dasharray="10 8"/>
+
+        <!-- постер -->
+        <g transform="translate(672 160) rotate(3)"><g class="fl" style="--fy:-36px;--fr:9deg;--fd:2.7s">
+          <rect width="62" height="84" rx="4" fill="#ff6fae"/>
+          <circle cx="31" cy="30" r="15" fill="#ffc857"/>
+          <path d="M8 66l12-14 10 9 12-16 12 21z" fill="#262a52"/>
+        </g></g>
+
+        <!-- вентилятор -->
+        <g transform="translate(85 0)"><g class="fl" style="--fy:-48px;--fr:5deg;--fd:3s">
+          <ellipse cx="340" cy="392" rx="34" ry="8" fill="#9aa0c9"/>
+          <rect x="337" y="282" width="6" height="110" fill="#9aa0c9"/>
+          <circle cx="340" cy="240" r="48" fill="#1c1f3d" stroke="#c9cbe8" stroke-width="4"/>
+          <g class="fan-blades" fill="#4be1ec">
+            <ellipse cx="340" cy="216" rx="11" ry="24"/>
+            <ellipse cx="340" cy="216" rx="11" ry="24" transform="rotate(120 340 240)"/>
+            <ellipse cx="340" cy="216" rx="11" ry="24" transform="rotate(240 340 240)"/>
+          </g>
+          <circle cx="340" cy="240" r="7" fill="#eef0ff"/>
+          <g class="wind" fill="none" stroke="#bff6fa" stroke-width="3" stroke-linecap="round">
+            <path d="M284 214q-14-8-28 0t-28 0"/>
+            <path d="M282 240q-14-8-28 0t-28 0"/>
+            <path d="M284 266q-14-8-28 0t-28 0"/>
+          </g>
+        </g></g>
+
+        <!-- тумба, телевизор, колонки -->
+        <g transform="translate(330 0)"><g class="fl" style="--fy:-44px;--fr:0deg;--fd:3.8s">
+          <rect x="480" y="330" width="270" height="54" rx="6" fill="#3a3f78"/>
+          <rect x="492" y="342" width="118" height="30" rx="4" fill="#2c315f"/><rect x="620" y="342" width="118" height="30" rx="4" fill="#2c315f"/>
+          <rect x="492" y="110" width="246" height="146" rx="10" fill="#0a0b16"/>
+          <rect x="500" y="118" width="230" height="130" rx="6" fill="#14162e"/>
+          <rect x="500" y="280" width="46" height="50" rx="6" fill="#14162e"/>
+          <rect x="684" y="280" width="46" height="50" rx="6" fill="#14162e"/>
+          <circle class="sp-cone" cx="523" cy="310" r="12" fill="#3a3f78" stroke="#8b7bff" stroke-width="3"/>
+          <circle class="sp-cone" cx="707" cy="310" r="12" fill="#3a3f78" stroke="#8b7bff" stroke-width="3"/>
+          <circle cx="523" cy="290" r="4" fill="#3a3f78"/><circle cx="707" cy="290" r="4" fill="#3a3f78"/>
+        </g></g>
+
+        <!-- база пылесоса -->
+        <rect x="1112" y="352" width="76" height="40" rx="8" fill="#3a3f78"/>
+        <rect x="1122" y="360" width="56" height="22" rx="5" fill="#14162e"/>
+
+        <!-- лампа: шнур и плафон -->
+        <path d="M600 0v72" stroke="#9aa0c9" stroke-width="3"/>
+        <path d="M568 102l12-32h40l12 32z" fill="#e8e9f7"/>
+
+        <!-- затемнение и тёплый свет -->
+        <rect class="dark" width="1200" height="500" fill="#06071a" opacity=".52"/>
+        <rect class="warmlight" width="1200" height="500" fill="url(#warm)"/>
+        <path class="cone" d="M572 102h56l140 290H432z" fill="url(#coneG)"/>
+        <circle class="bulb" cx="600" cy="106" r="9"/>
+
+        <!-- окно: погода зависит от температуры -->
+        <g clip-path="url(#winClip)">
+          <rect class="sky s-clear" x="70" y="70" width="260" height="200" fill="url(#sky)"/>
+          <rect class="sky s-snow" x="70" y="70" width="260" height="200" fill="url(#skySnow)"/>
+          <rect class="sky s-rain" x="70" y="70" width="260" height="200" fill="url(#skyRain)"/>
+          <rect class="sky s-hot" x="70" y="70" width="260" height="200" fill="url(#skyHot)"/>
+          <g class="wx wx-clear">
+            <circle cx="285" cy="115" r="18" fill="#fdf3c4"/>
+            <circle cx="278" cy="110" r="4" fill="#e9dca0"/>
+            <g fill="#fff"><circle cx="100" cy="100" r="1.8"/><circle cx="135" cy="140" r="1.4"/><circle cx="165" cy="92" r="1.6"/><circle cx="110" cy="190" r="1.5"/><circle cx="225" cy="175" r="1.7"/><circle cx="180" cy="215" r="1.3"/><circle cx="240" cy="100" r="1.4"/><circle cx="305" cy="180" r="1.6"/><circle cx="262" cy="200" r="1.3"/><circle cx="212" cy="128" r="1.2"/></g>
+          </g>
+          <g class="wx wx-hot">
+            <g class="sunrays" stroke="#ffe27a" stroke-width="4" stroke-linecap="round">
+              <path d="M275 74v12"/><path d="M275 74v12" transform="rotate(45 275 118)"/><path d="M275 74v12" transform="rotate(90 275 118)"/><path d="M275 74v12" transform="rotate(135 275 118)"/>
+              <path d="M275 74v12" transform="rotate(180 275 118)"/><path d="M275 74v12" transform="rotate(225 275 118)"/><path d="M275 74v12" transform="rotate(270 275 118)"/><path d="M275 74v12" transform="rotate(315 275 118)"/>
+            </g>
+            <circle cx="275" cy="118" r="24" fill="#ffd23f"/>
+          </g>
+          <g class="rainbow" fill="none" stroke-width="7">
+            <circle cx="200" cy="300" r="170" stroke="#ff6f6f"/><circle cx="200" cy="300" r="163" stroke="#ffc857"/><circle cx="200" cy="300" r="156" stroke="#6ee7a0"/><circle cx="200" cy="300" r="149" stroke="#4be1ec"/><circle cx="200" cy="300" r="142" stroke="#8b7bff"/>
+          </g>
+          <g class="wx wx-cloud">
+            <ellipse cx="120" cy="106" rx="36" ry="14"/><ellipse cx="146" cy="96" rx="24" ry="14"/><ellipse cx="98" cy="100" rx="18" ry="10"/>
+            <ellipse cx="256" cy="128" rx="40" ry="15"/><ellipse cx="282" cy="116" rx="24" ry="13"/><ellipse cx="232" cy="121" rx="18" ry="10"/>
+            <ellipse cx="195" cy="88" rx="30" ry="11"/>
+          </g>
+          <path class="land" d="M70 270V235l25-18 20 12 22-30 28 22 20-14 30 24 35-20 25 16 22-22 33 20V270z"/>
+          <g class="wx wx-rain" id="rain"></g>
+          <g class="wx wx-snow" id="snow"></g>
+          <rect class="wx wx-frost" x="70" y="70" width="260" height="200" fill="url(#frostG)"/>
+        </g>
+        <g class="dimmable">
+          <rect x="70" y="70" width="260" height="200" rx="8" fill="none" stroke="#c9cbe8" stroke-width="6"/>
+          <path d="M200 70v200M70 170h260" stroke="#c9cbe8" stroke-width="4"/>
+          <rect x="52" y="56" width="296" height="8" rx="4" fill="#8f93c7"/>
+          <g class="curtain">
+            <path d="M58 62h44c-4 70 2 150-14 222H58z" fill="#8b7bff"/>
+            <path d="M342 62h-44c4 70-2 150 14 222h30z" fill="#8b7bff"/>
+          </g>
+        </g>
+
+        <!-- диван и кот -->
+        <g class="dimmable" transform="translate(38 0)"><g class="fl" style="--fy:-70px;--fr:-4deg;--fd:3.4s">
+          <rect x="50" y="286" width="225" height="62" rx="20" fill="#4a3db8"/>
+          <rect x="42" y="322" width="241" height="52" rx="18" fill="#5a4bd1"/>
+          <rect x="70" y="302" width="60" height="40" rx="12" fill="#ff6fae"/>
+          <rect x="195" y="304" width="56" height="38" rx="12" fill="#4be1ec"/>
+          <rect x="62" y="372" width="10" height="16" fill="#2c2f5e"/><rect x="254" y="372" width="10" height="16" fill="#2c2f5e"/>
+          <use href="#cat" x="162" y="325" class="cat-sofa"/>
+        </g></g>
+
+        <!-- всё, что светится само -->
+        <g transform="translate(330 0)"><g class="fl" style="--fy:-44px;--fr:0deg;--fd:3.8s">
+          <g class="tv-glow">
+            <g class="tv-film" clip-path="url(#screenClip)">
+              <rect x="500" y="118" width="230" height="130" fill="url(#film)"/>
+              <circle cx="615" cy="205" r="26" fill="#fff3c4"/>
+              <path class="hills2" d="M500 248v-34q28.75-22 57.5 0t57.5 0 57.5 0 57.5 0 57.5 0 57.5 0 57.5 0 57.5 0v34z" fill="#7a3fa8"/>
+              <path class="hills" d="M500 248v-18q28.75-20 57.5 0t57.5 0 57.5 0 57.5 0 57.5 0 57.5 0 57.5 0 57.5 0v18z" fill="#2a1d5e"/>
+            </g>
+          </g>
+          <circle class="led" cx="726" cy="252" r="2.5"/>
+          <g class="eq">
+            <rect x="570" y="296" width="9" height="32" rx="2"/><rect x="584" y="296" width="9" height="32" rx="2"/>
+            <rect x="598" y="296" width="9" height="32" rx="2"/><rect x="612" y="296" width="9" height="32" rx="2"/>
+            <rect x="626" y="296" width="9" height="32" rx="2"/><rect x="640" y="296" width="9" height="32" rx="2" style="animation-delay:.3s"/>
+            <rect x="654" y="296" width="9" height="32" rx="2" style="animation-delay:.16s"/>
+          </g>
+          <text class="note" x="478" y="296" fill="#ff6fae">♪</text>
+          <text class="note n2" x="742" y="290" fill="#4be1ec">♫</text>
+          <text class="note n3" x="462" y="270" fill="#ffc857">♫</text>
+          <text class="note n4" x="758" y="268" fill="#8b7bff">♪</text>
+        </g></g>
+
+        <!-- термостат -->
+        <circle cx="540" cy="215" r="33" fill="#14162e" stroke="#c9cbe8" stroke-width="4"/>
+        <circle class="th-ring" cx="540" cy="215" r="25" fill="none" stroke-width="3"/>
+        <text id="thIcon" x="540" y="210" text-anchor="middle" font-size="14" fill="#ffc857">🌙</text>
+        <text id="thTemp" x="540" y="229" text-anchor="middle" font-size="15" font-weight="800" fill="#eef0ff">+20°</text>
+
+        <!-- счётчик пыли на базе -->
+        <text id="dustCount" x="1150" y="376" text-anchor="middle" font-size="13" font-weight="800" fill="#4be1ec">🧹 0</text>
+
+        <!-- диско-шар -->
+        <g class="disco-beams">
+          <path d="M772 74l560-34v68z" fill="#ff6fae"/>
+          <path d="M772 74l560-34v68z" fill="#4be1ec" transform="rotate(60 772 74)"/>
+          <path d="M772 74l560-34v68z" fill="#ffc857" transform="rotate(120 772 74)"/>
+          <path d="M772 74l560-34v68z" fill="#8b7bff" transform="rotate(180 772 74)"/>
+          <path d="M772 74l560-34v68z" fill="#6ee7a0" transform="rotate(240 772 74)"/>
+          <path d="M772 74l560-34v68z" fill="#ff9a6f" transform="rotate(300 772 74)"/>
+        </g>
+        <g class="disco-ball">
+          <path d="M772 -120v174" stroke="#9aa0c9" stroke-width="3"/>
+          <circle cx="772" cy="74" r="22" fill="url(#ballG)"/>
+          <path d="M751 68h42M750 80h44M772 52v44M761 55q-8 19 0 38M783 55q8 19 0 38" fill="none" stroke="#5f6499" stroke-width="1.5"/>
+          <circle cx="764" cy="66" r="4" fill="#fff" opacity=".8"/>
+        </g>
+
+        <!-- пыль, метка и робот-пылесос -->
+        <g id="dust"></g>
+        <ellipse id="botMark" class="mark" rx="15" ry="6"/>
+        <g id="robot" transform="translate(1150 414)">
+          <g class="fl" style="--fy:-95px;--fr:12deg;--fd:2.9s">
+            <ellipse cx="0" cy="7" rx="36" ry="10" fill="#06071a" opacity=".35"/>
+            <ellipse cx="0" cy="2" rx="33" ry="12" fill="#8f93c7"/>
+            <ellipse cx="0" cy="-3" rx="33" ry="12" fill="#eef0ff"/>
+            <ellipse cx="0" cy="-4" rx="13" ry="4.5" fill="#262a52"/>
+            <circle class="rled" cx="0" cy="-4" r="2.6"/>
+            <use href="#cat" x="-3" y="-11" class="cat-ride"/>
+          </g>
+        </g>
+
+        <rect class="disco-tint" width="1200" height="500"/>
+        <rect id="floorHit" x="0" y="396" width="1200" height="104" fill="#000" fill-opacity="0"/>
+      </svg>
+      </div>
+    </div>
+
+    <div class="chips">
+      <button class="chip" data-dev="light" aria-pressed="false"><b>💡 Свет</b><small>выключен</small></button>
+      <button class="chip" data-dev="music" aria-pressed="false"><b>🎵 Музыка</b><small>выключена</small></button>
+      <button class="chip" data-dev="fan" aria-pressed="false"><b>🌀 Вентилятор</b><small>выключен</small></button>
+      <button class="chip" data-dev="tv" aria-pressed="false"><b>📺 Кино</b><small>выключено</small></button>
+      <button class="chip" data-dev="disco" aria-pressed="false"><b>✨ Диско</b><small>выключено</small></button>
+      <button class="chip" data-dev="zero" aria-pressed="false"><b>🚀 Невесомость</b><small>выключена</small></button>
+      <button class="chip" data-dev="vac" aria-pressed="false"><b>🤖 Пылесос</b><small>на базе</small></button>
+      <button class="chip" data-dev="vacLeft"><b>◀ Влево</b><small>рулить пылесосом</small></button>
+      <button class="chip" data-dev="vacRight"><b>▶ Вправо</b><small>рулить пылесосом</small></button>
+      <button class="chip" data-dev="cooler"><b>❄ Холоднее</b><small>на 5° ниже</small></button>
+      <button class="chip" data-dev="warmer"><b>🔥 Теплее</b><small>на 5° выше</small></button>
+      <button class="chip stop" data-dev="stop"><b>⛔ Стоп</b></button>
+    </div>
+    <p class="tip">Кнопки можно нажимать и мышкой, чтобы проверить, как работает комната. Нажми на пол, и пылесос поедет в эту точку. Но голосом интереснее.</p>
+  </section>
+
+  <!-- ================= ПАНЕЛЬ ================= -->
+  <aside class="panel">
+    <div class="card">
+      <h2><span class="num">1</span>Подключи модель</h2>
+      <p>В Teachable Machine нажми «Экспортировать модель» → «Загрузить мою модель» и скопируй ссылку.</p>
+      <input type="url" id="url" placeholder="https://teachablemachine.withgoogle.com/models/…/" autocomplete="off" spellcheck="false">
+      <button class="btn" id="connect">Подключить</button>
+      <div class="status" id="status" role="status"></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">2</span>Говори команды</h2>
+      <button class="btn" id="listen" disabled>🎙 Начать слушать</button>
+      <div class="setting">
+        <label for="thr">Уверенность от</label>
+        <input type="range" id="thr" min="50" max="99" value="80">
+        <output id="thrOut">80%</output>
+      </div>
+      <div class="setting">
+        <input type="checkbox" id="sound" checked>
+        <label for="sound">Звук: музыка и игра</label>
+      </div>
+      <ul class="log" id="log" aria-live="polite"></ul>
+    </div>
+
+    <div class="card">
+      <h2><span class="num">3</span>Что слышит нейросеть</h2>
+      <div class="rows" id="rows">
+        <div class="empty">Здесь появятся классы твоей модели и то, насколько она уверена в каждом. Если назвал классы по-своему, сможешь сам выбрать, чем каждый управляет.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Слова для дома</h2>
+      <ul class="words">
+        <li><b>свет</b> → лампа</li>
+        <li><b>музыка</b> → колонки</li>
+        <li><b>ветер</b> → вентилятор</li>
+        <li><b>кино</b> → телевизор</li>
+        <li><b>пылесос</b> → робот убирает пыль</li>
+        <li><b>влево</b> / <b>вправо</b> → рулить пылесосом</li>
+        <li><b>теплее</b> / <b>холоднее</b> → погода за окном</li>
+        <li><b>диско</b> → диско-шар</li>
+        <li><b>космос</b> → невесомость</li>
+        <li><b>стоп</b> → выключить всё</li>
+      </ul>
+      <p style="margin:12px 0 0">Сказал слово один раз, устройство включилось. Сказал ещё раз, выключилось.</p>
+    </div>
+  </aside>
+</main>
+
+<section class="game-sec">
+  <div class="card" id="gameCard">
+    <div class="game-head">
+      <h2><span class="num">★</span>Дино-бластер</h2>
+      <div class="pace" role="group" aria-label="Темп игры">
+        Темп:
+        <button type="button" data-pace="voice" aria-pressed="false">🎙 голосом, помедленнее</button>
+        <button type="button" data-pace="keys" aria-pressed="true">⌨ клавишами, быстро</button>
+      </div>
+    </div>
+    <div class="game-wrap"><canvas id="game" aria-label="Игра: динозавр бежит, прыгает через кактусы, приседает под лучом НЛО и стреляет по роботам"></canvas></div>
+    <div class="pads">
+      <button class="pad" type="button" data-act="jump">⬆ Прыг<small>пробел или ↑</small></button>
+      <button class="pad" type="button" data-act="shoot">💥 Огонь<small>F или →</small></button>
+      <button class="pad" type="button" data-act="duck">⬇ Вниз<small>↓ (держать)</small></button>
+    </div>
+    <ul class="words">
+      <li><b>прыг</b> → перепрыгнуть кактус</li>
+      <li><b>вниз</b> → присесть под лучом НЛО</li>
+      <li><b>огонь</b> → разбить робота-стену</li>
+    </ul>
+  </div>
+</section>
+
+<footer>Модель работает прямо в твоём браузере: звук с микрофона никуда не отправляется.</footer>
+
+<script>
+(function(){
+  'use strict';
+  var $ = function(id){ return document.getElementById(id); };
+  var stage = $('stage'), heard = $('heard'), statusEl = $('status'), rowsEl = $('rows'), logEl = $('log');
+  var urlInput = $('url'), connectBtn = $('connect'), listenBtn = $('listen'), thr = $('thr'), thrOut = $('thrOut'), soundBox = $('sound');
+
+  var DEV = {
+    light:{name:'Свет', on:'включён', off:'выключен', msgOn:'свет включён', msgOff:'свет выключен'},
+    music:{name:'Музыка', on:'играет', off:'выключена', msgOn:'музыка играет', msgOff:'музыка выключена'},
+    fan:{name:'Вентилятор', on:'крутится', off:'выключен', msgOn:'вентилятор крутится', msgOff:'вентилятор выключен'},
+    tv:{name:'Кино', on:'идёт', off:'выключено', msgOn:'кино идёт', msgOff:'кино выключено'},
+    vac:{name:'Пылесос', on:'убирает', off:'на базе', msgOn:'пылесос поехал убирать', msgOff:'пылесос едет на базу'},
+    disco:{name:'Диско', on:'сверкает', off:'выключено', msgOn:'диско включено', msgOff:'диско выключено'},
+    zero:{name:'Невесомость', on:'всё летает', off:'выключена', msgOn:'невесомость: всё взлетело', msgOff:'гравитация вернулась'}
+  };
+  var ALIASES = {
+    light:['свет','лампа','light','lamp'],
+    music:['музык','песн','music'],
+    fan:['ветер','вентилятор','fan','wind'],
+    tv:['кино','телевизор','фильм','тв','tv','movie'],
+    stop:['стоп','stop','выключ'],
+    vac:['пылесос','робот','уборк','vacuum','robot'],
+    vacLeft:['лево','left'],
+    vacRight:['право','right'],
+    warmer:['тепл','жар','warm','hot','heat'],
+    cooler:['холод','мороз','прохлад','cold','cool'],
+    disco:['диско','disco','танц','dance'],
+    zero:['космос','невесом','полет','gravity','space'],
+    jump:['прыг','прыж','jump'],
+    shoot:['огонь','выстрел','пиу','бах','fire','shoot'],
+    duck:['вниз','присядь','присесть','сесть','duck','down']
+  };
+  var state = {light:false, music:false, fan:false, tv:false, vac:false, disco:false, zero:false};
+  var recognizer = null, labels = [], mapping = [], rowRefs = [], listening = false;
+  var lastFireAt = 0, lastFireIdx = -1;
+
+  /* ---------- комната ---------- */
+  function setDevice(key, value){
+    state[key] = value;
+    stage.classList.toggle('on-' + key, value);
+    var chip = document.querySelector('.chip[data-dev="' + key + '"]');
+    chip.setAttribute('aria-pressed', String(value));
+    chip.querySelector('small').textContent = value ? DEV[key].on : DEV[key].off;
+    if (key === 'music') { if (value) startMusic(); else stopMusic(); }
+  }
+  function act(action){
+    if (action === 'stop') {
+      Object.keys(state).forEach(function(k){ setDevice(k, false); });
+      bot.manual = 0; bot.target = null;
+      return 'всё выключено';
+    }
+    if (action === 'warmer' || action === 'cooler') return changeTemp(action === 'warmer' ? 5 : -5);
+    if (action === 'vacLeft' || action === 'vacRight') {
+      if (!state.vac) setDevice('vac', true);
+      bot.manual = action === 'vacLeft' ? -1 : 1; bot.target = null;
+      return action === 'vacLeft' ? 'пылесос едет влево' : 'пылесос едет вправо';
+    }
+    setDevice(action, !state[action]);
+    if (action === 'vac') { bot.manual = 0; bot.target = null; }
+    if (action === 'disco' && state.disco && !state.music) { setDevice('music', true); return 'диско включено, музыка тоже'; }
+    return state[action] ? DEV[action].msgOn : DEV[action].msgOff;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.chip'), function(chip){
+    chip.addEventListener('click', function(){
+      ensureAudio();
+      addLog('Кнопка: ' + act(chip.dataset.dev));
+    });
+  });
+
+  /* ---------- музыка (синтезатор) ---------- */
+  var actx = null, master = null, musicTimer = null, step = 0, nextTime = 0;
+  var SCALE = [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33, 659.25];
+  var MELODY = [5,7,8,7, 5,4,5,null, 3,5,7,5, 4,3,4,null];
+  var BASS = [110, 110, 87.31, 98];
+  function ensureAudio(){
+    try {
+      if (!actx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        actx = new AC();
+        master = actx.createGain(); master.gain.value = 0.13; master.connect(actx.destination);
+      }
+      if (actx.state === 'suspended') actx.resume();
+    } catch (e) { actx = null; }
+  }
+  function tone(freq, t, dur, type, vol){
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  function schedule(){
+    while (nextTime < actx.currentTime + 0.2) {
+      var m = MELODY[step];
+      if (m !== null) tone(SCALE[m], nextTime, 0.3, 'triangle', 0.9);
+      if (step % 4 === 0) tone(BASS[step / 4], nextTime, 0.9, 'sine', 1);
+      if (step % 2 === 1) tone(SCALE[m === null ? 3 : Math.max(0, m - 3)], nextTime, 0.12, 'square', 0.12);
+      nextTime += 0.27; step = (step + 1) % 16;
+    }
+  }
+  function startMusic(){
+    stopMusic();
+    if (!soundBox.checked) return;
+    ensureAudio(); if (!actx) return;
+    step = 0; nextTime = actx.currentTime + 0.06;
+    musicTimer = setInterval(schedule, 50);
+  }
+  function stopMusic(){ if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } }
+  soundBox.addEventListener('change', function(){ if (state.music) startMusic(); });
+
+  /* ---------- климат: температура меняет погоду за окном ---------- */
+  var NS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+  var temp = 20, weather = 'clear', rainbowTimer = null, thTemp = $('thTemp'), thIcon = $('thIcon');
+  var WEATHER = {snow:['❄', 'идёт снег'], rain:['🌧', 'льёт дождь'], clear:['🌙', 'ясная ночь'], hot:['☀', 'жара и солнце']};
+  (function(){
+    var rain = $('rain'), snow = $('snow'), k, e, x;
+    for (k = 0; k < 26; k++) {
+      x = 75 + Math.random() * 300;
+      e = svgEl('line', {x1:x, y1:48, x2:x - 5, y2:66});
+      e.style.animationDuration = (0.55 + Math.random() * 0.4).toFixed(2) + 's';
+      e.style.animationDelay = (-Math.random()).toFixed(2) + 's';
+      rain.appendChild(e);
+    }
+    for (k = 0; k < 30; k++) {
+      e = svgEl('circle', {cx:72 + Math.random() * 256, cy:62, r:(1.3 + Math.random() * 2).toFixed(1)});
+      e.style.animationDuration = (3 + Math.random() * 3.5).toFixed(2) + 's';
+      e.style.animationDelay = (-Math.random() * 6).toFixed(2) + 's';
+      snow.appendChild(e);
+    }
+  })();
+  function fmtTemp(t){ return (t > 0 ? '+' : t < 0 ? '−' : '') + Math.abs(t) + '°'; }
+  function changeTemp(delta){
+    var t = Math.max(-10, Math.min(35, temp + delta)), rainbow = false;
+    if (t === temp) return (delta > 0 ? 'теплее уже некуда: ' : 'холоднее уже некуда: ') + fmtTemp(temp);
+    var prev = weather; temp = t;
+    weather = t <= 0 ? 'snow' : t <= 10 ? 'rain' : t <= 25 ? 'clear' : 'hot';
+    if (weather !== prev) {
+      stage.classList.remove('w-' + prev, 'rainbow-on'); stage.classList.add('w-' + weather);
+      clearTimeout(rainbowTimer);
+      if (prev === 'rain' && weather === 'clear') {       // после дождя появляется радуга
+        rainbow = true; stage.classList.add('rainbow-on');
+        rainbowTimer = setTimeout(function(){ stage.classList.remove('rainbow-on'); }, 9000);
+      }
+    }
+    thTemp.textContent = fmtTemp(temp); thIcon.textContent = WEATHER[weather][0];
+    return 'температура ' + fmtTemp(temp) + ', за окном ' + WEATHER[weather][1] + (rainbow ? ' и радуга' : '');
+  }
+
+  /* ---------- робот-пылесос ---------- */
+  var roomSvg = $('room'), robotEl = $('robot'), dustEl = $('dust'), markEl = $('botMark'), dustCount = $('dustCount');
+  var DOCK = {x:1150, y:414}, BX0 = 40, BX1 = 1160, BY0 = 408, BY1 = 484;
+  var bot = {x:DOCK.x, y:DOCK.y, manual:0, target:null, wander:null, eaten:0, spawnT:1, markOn:false};
+  var dust = [];
+  function addDust(){
+    var d = {x:Math.round(50 + Math.random() * 1030), y:Math.round(410 + Math.random() * 72)};
+    d.el = svgEl('g', {transform:'translate(' + d.x + ' ' + d.y + ')', fill:'#e3d6ae'});
+    d.el.appendChild(svgEl('circle', {cx:-4, cy:1, r:2.2}));
+    d.el.appendChild(svgEl('circle', {cx:3, cy:-1, r:1.8}));
+    d.el.appendChild(svgEl('circle', {cx:1, cy:3, r:1.5}));
+    dustEl.appendChild(d.el); dust.push(d);
+  }
+  for (var d0 = 0; d0 < 7; d0++) addDust();
+  function roomTick(dt){
+    var i, tx = DOCK.x, ty = DOCK.y, best = null, bd = 1e9, dx, dy, dist;
+    bot.spawnT -= dt;
+    if (bot.spawnT <= 0) { if (dust.length < 12) addDust(); bot.spawnT = 2 + Math.random() * 3; }
+    if (state.vac) {
+      if (bot.manual) { tx = bot.manual < 0 ? BX0 : BX1; ty = bot.y; }
+      else if (bot.target) { tx = bot.target.x; ty = bot.target.y; }
+      else {
+        for (i = 0; i < dust.length; i++) {
+          dx = dust[i].x - bot.x; dy = dust[i].y - bot.y; dist = dx * dx + dy * dy;
+          if (dist < bd) { bd = dist; best = dust[i]; }
+        }
+        if (best) { tx = best.x; ty = best.y; }
+        else {
+          if (!bot.wander) bot.wander = {x:BX0 + Math.random() * (BX1 - BX0), y:BY0 + Math.random() * (BY1 - BY0)};
+          tx = bot.wander.x; ty = bot.wander.y;
+        }
+      }
+    }
+    dx = tx - bot.x; dy = ty - bot.y; dist = Math.sqrt(dx * dx + dy * dy);
+    var stepLen = 170 * dt;
+    if (dist > 0.01) {
+      if (dist <= stepLen) {
+        bot.x = tx; bot.y = ty;
+        if (state.vac) { if (bot.manual) bot.manual = 0; else if (bot.target) bot.target = null; else bot.wander = null; }
+      } else { bot.x += dx / dist * stepLen; bot.y += dy / dist * stepLen; }
+      robotEl.setAttribute('transform', 'translate(' + bot.x.toFixed(1) + ' ' + bot.y.toFixed(1) + ')');
+    } else if (state.vac) { if (bot.manual) bot.manual = 0; else if (bot.target) bot.target = null; else bot.wander = null; }
+    var showMark = !!(state.vac && !bot.manual && bot.target);
+    if (showMark !== bot.markOn) { bot.markOn = showMark; markEl.classList.toggle('show', showMark); }
+    if (state.vac) for (i = dust.length - 1; i >= 0; i--) {
+      if (Math.abs(dust[i].x - bot.x) < 30 && Math.abs(dust[i].y - bot.y) < 13) {
+        dustEl.removeChild(dust[i].el); dust.splice(i, 1);
+        bot.eaten++; dustCount.textContent = '🧹 ' + bot.eaten;
+        if (soundBox.checked && actx) tone(1250, actx.currentTime, 0.05, 'sine', 0.2);
+      }
+    }
+  }
+  $('floorHit').addEventListener('click', function(e){
+    var pt = roomSvg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    var p = pt.matrixTransform(roomSvg.getScreenCTM().inverse());
+    ensureAudio();
+    if (!state.vac) setDevice('vac', true);
+    bot.manual = 0;
+    bot.target = {x:Math.max(BX0, Math.min(BX1, p.x)), y:Math.max(BY0, Math.min(BY1, p.y))};
+    markEl.setAttribute('cx', bot.target.x.toFixed(0)); markEl.setAttribute('cy', bot.target.y.toFixed(0));
+    addLog('Пылесос едет туда, куда ты показал');
+  });
+
+  /* ---------- интерфейс ---------- */
+  function setStatus(text, kind){ statusEl.textContent = text; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
+  function addLog(text){
+    var li = document.createElement('li');
+    var d = new Date();
+    li.textContent = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2) + '  ' + text;
+    logEl.insertBefore(li, logEl.firstChild);
+    while (logEl.children.length > 5) logEl.removeChild(logEl.lastChild);
+  }
+  function norm(s){ return String(s).toLowerCase().replace(/ё/g, 'е').trim(); }
+  function guessAction(label, index){
+    var n = norm(label);
+    if (/фон|шум|background|noise/.test(n)) return 'none';
+    for (var key in ALIASES) {
+      for (var i = 0; i < ALIASES[key].length; i++) if (n.indexOf(ALIASES[key][i]) !== -1) return key;
+    }
+    return 'none';
+  }
+  function buildRows(){
+    rowsEl.innerHTML = ''; rowRefs = []; mapping = [];
+    var options = [['none','ничего'],['light','💡 свет'],['music','🎵 музыка'],['fan','🌀 вентилятор'],['tv','📺 кино'],['vac','🤖 пылесос'],['vacLeft','◀ пылесос влево'],['vacRight','▶ пылесос вправо'],['warmer','🔥 теплее'],['cooler','❄ холоднее'],['disco','✨ диско'],['zero','🚀 невесомость'],['stop','⛔ выключить всё'],['jump','🦖 игра: прыжок'],['shoot','💥 игра: выстрел'],['duck','⬇ игра: присесть']];
+    labels.forEach(function(label, i){
+      var row = document.createElement('div'); row.className = 'row';
+      var name = document.createElement('div'); name.className = 'name'; name.textContent = label;
+      var pct = document.createElement('span'); pct.className = 'pct'; pct.textContent = '0%';
+      name.appendChild(pct);
+      var sel = document.createElement('select'); sel.setAttribute('aria-label', 'Чем управляет класс ' + label);
+      options.forEach(function(o){ var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; sel.appendChild(op); });
+      mapping[i] = guessAction(label, i); sel.value = mapping[i];
+      sel.addEventListener('change', function(){ mapping[i] = sel.value; });
+      var bar = document.createElement('div'); bar.className = 'bar';
+      var fill = document.createElement('i'); bar.appendChild(fill);
+      row.appendChild(name); row.appendChild(sel); row.appendChild(bar);
+      rowsEl.appendChild(row);
+      rowRefs.push({row:row, fill:fill, pct:pct});
+    });
+  }
+
+  /* ---------- модель ---------- */
+  function cleanUrl(raw){
+    var u = raw.trim().replace(/(model|metadata)\.json.*$/i, '').replace(/[?#].*$/, '');
+    if (!/^https?:\/\//i.test(u)) return null;
+    if (u.slice(-1) !== '/') u += '/';
+    return u;
+  }
+  async function connect(){
+    var url = cleanUrl(urlInput.value);
+    if (!url) { setStatus('Вставь ссылку целиком, она начинается с https://', 'err'); return; }
+    if (typeof speechCommands === 'undefined') { setStatus('Не загрузились библиотеки. Проверь интернет и обнови страницу.', 'err'); return; }
+    connectBtn.disabled = true; listenBtn.disabled = true;
+    setStatus('Загружаю модель…');
+    try {
+      if (listening) await stopListening();
+      var rec = speechCommands.create('BROWSER_FFT', undefined, url + 'model.json', url + 'metadata.json');
+      await rec.ensureModelLoaded();
+      recognizer = rec;
+      labels = recognizer.wordLabels();
+      buildRows();
+      try { localStorage.setItem('voiceHomeModel', url); } catch (e) {}
+      var used = mapping.filter(function(m){ return m !== 'none'; }).length;
+      setStatus('Готово! Классов в модели: ' + labels.length + ', из них управляют домом и игрой: ' + used + '.', 'ok');
+      heard.textContent = 'Нажми «Начать слушать»';
+      listenBtn.disabled = false;
+    } catch (e) {
+      console.error(e);
+      setStatus('Не получилось. Проверь, что модель звуковая (Audio Project) и что ты нажал «Загрузить мою модель» перед копированием ссылки.', 'err');
+      listenBtn.disabled = !recognizer;
+    }
+    connectBtn.disabled = false;
+  }
+  async function startListening(){
+    ensureAudio();
+    try {
+      await recognizer.listen(function(result){ onScores(result.scores); return Promise.resolve(); }, {
+        includeSpectrogram:false, probabilityThreshold:0, invokeCallbackOnNoiseAndUnknown:true, overlapFactor:0.75
+      });
+      listening = true;
+      setPace(true);
+      listenBtn.textContent = '⏹ Остановить'; listenBtn.classList.add('live');
+      heard.textContent = 'Слушаю… скажи команду';
+    } catch (e) {
+      console.error(e);
+      heard.textContent = 'Нет доступа к микрофону';
+      addLog('Разреши доступ к микрофону в браузере и попробуй ещё раз.');
+    }
+  }
+  async function stopListening(){
+    try { await recognizer.stopListening(); } catch (e) {}
+    listening = false;
+    listenBtn.textContent = '🎙 Начать слушать'; listenBtn.classList.remove('live');
+    heard.textContent = 'Пауза';
+    rowRefs.forEach(function(r){ r.fill.style.width = '0%'; r.pct.textContent = '0%'; r.row.classList.remove('top'); });
+  }
+  function onScores(scores){
+    var top = 0, i;
+    for (i = 1; i < scores.length; i++) if (scores[i] > scores[top]) top = i;
+    for (i = 0; i < rowRefs.length; i++) {
+      var p = Math.round(scores[i] * 100);
+      rowRefs[i].fill.style.width = p + '%';
+      rowRefs[i].pct.textContent = p + '%';
+      rowRefs[i].row.classList.toggle('top', i === top);
+    }
+    var action = mapping[top], score = scores[top], now = Date.now();
+    if (!action || action === 'none') { if (lastFireIdx === top) lastFireIdx = -1; if (now - lastFireAt > 1500) { lastFireIdx = -1; } return; }
+    if (score < Number(thr.value) / 100) return;
+    if (action === 'jump' || action === 'shoot' || action === 'duck') {   // команды игры срабатывают чаще
+      if (now - (gameFireAt[action] || 0) < 600) return;
+      gameFireAt[action] = now;
+      gameCommand(action, true);
+      heard.textContent = '«' + labels[top] + '» · ' + Math.round(score * 100) + '%';
+      return;
+    }
+    if (now - lastFireAt < 1000) return;             // пауза между любыми командами
+    if (top === lastFireIdx && now - lastFireAt < 2200) return;  // одно слово не срабатывает дважды подряд
+    lastFireAt = now; lastFireIdx = top;
+    var msg = act(action), pct = Math.round(score * 100);
+    heard.textContent = '«' + labels[top] + '» · ' + pct + '%';
+    heard.classList.add('flash'); setTimeout(function(){ heard.classList.remove('flash'); }, 600);
+    addLog('«' + labels[top] + '» (' + pct + '%) → ' + msg);
+  }
+
+  /* ---------- игра «Дино-бластер» ---------- */
+  var cv = $('game'), g = cv.getContext('2d');
+  var GW = 900, GH = 300, GROUND = 250;
+  var gameVisible = true, gameFireAt = {};
+  var G = {state:'idle', voice:false, t:0, clock:0, score:0, best:0, lives:3, speed:0, dist:0, nextSpawn:0, spawned:0,
+           obs:[], bullets:[], parts:[], pops:[], queued:null, inv:0, shake:0, overAt:0};
+  var dino = {x:110, y:0, vy:0, duckT:0, keyDuck:false, cd:0, muzzle:0};
+  try { G.best = Number(localStorage.getItem('voiceHomeDinoBest')) || 0; } catch (e) {}
+
+  (function(){ var dpr = Math.min(window.devicePixelRatio || 1, 2); cv.width = GW * dpr; cv.height = GH * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0); })();
+
+  function rnd(a, b){ return a + Math.random() * (b - a); }
+  function P(){
+    return G.voice ? {v0:150, vmax:235, acc:1.3, grav:1100, jump:560, gapMin:2.7, gapMax:3.7}
+                   : {v0:300, vmax:600, acc:5,   grav:2500, jump:840, gapMin:1.0, gapMax:1.75};
+  }
+  function setPace(voice){
+    G.voice = voice;
+    Array.prototype.forEach.call(document.querySelectorAll('.pace button'), function(b){
+      b.setAttribute('aria-pressed', String((b.dataset.pace === 'voice') === voice));
+    });
+  }
+
+  /* спрайты из пикселей */
+  function sprite(rows){
+    var s = 3, c = document.createElement('canvas'), w = 0, i, j;
+    for (i = 0; i < rows.length; i++) w = Math.max(w, rows[i].length);
+    c.width = w * s; c.height = rows.length * s;
+    var x = c.getContext('2d');
+    for (i = 0; i < rows.length; i++) for (j = 0; j < rows[i].length; j++) {
+      var ch = rows[i].charAt(j); if (ch === '.') continue;
+      x.fillStyle = ch === 'E' ? '#0d0e1a' : ch === 'B' ? '#c8ffe0' : '#6ee7a0';
+      x.fillRect(j * s, i * s, s, s);
+    }
+    return c;
+  }
+  var BODY = [
+    '..........XXXXXXXX..', '.........XXXXXXXXXX.', '.........XXEXXXXXXX.', '.........XXXXXXXXXX.',
+    '.........XXXXXXXXXX.', '.........XXXXX......', '.........XXXXXXXX...', 'X.......XXXXX.......',
+    'X......XXXXXXXXX....', 'XX....XXXXXXBX.X....', 'XXX..XXXXXXBBX......', 'XXXXXXXXXXXBBX......',
+    '.XXXXXXXXXXBB.......', '..XXXXXXXXXB........', '...XXXXXXXXX........', '....XXXXXXX.........'];
+  var LOW = [
+    'X..............XXXXXXXXX..', 'XX...XXXXXXXXXXXXXEXXXXXXX', 'XXXXXXXXXXXXXXXXXXXXXXXXXX', '.XXXXXXXXXXXXXXXXXXXXXXXXX',
+    '..XXXXXXXXXXXXXXXXXXX.....', '...XXXXXXXXXXBBB.XXXXXXX..', '....XXXXXXXXXXX...........'];
+  var RUN = [sprite(BODY.concat(['.....XXX.XX.........', '.....XX...XX........', '.....X..............', '.....XX.............'])),
+             sprite(BODY.concat(['.....XXX.XX.........', '......XX..X.........', '..........X.........', '..........XX........']))];
+  var DUCK = [sprite(LOW.concat(['.....XXX.XX...............', '.....XX...XX..............', '.....X....................'])),
+              sprite(LOW.concat(['.....XXX.XX...............', '......XX..X...............', '..........XX..............']))];
+
+  /* фон */
+  var stars = [], city = [], pebbles = [], i0, cx0 = 0;
+  for (i0 = 0; i0 < 46; i0++) stars.push({x:Math.random() * GW, y:Math.random() * 170, r:rnd(0.6, 1.8), ph:Math.random() * 6});
+  while (cx0 < 1000) {
+    var bw = Math.round(rnd(30, 70)), bh = Math.round(rnd(30, 95)), win = [], wi;
+    for (wi = 0; wi < 40; wi++) win.push(Math.random() < 0.35);
+    city.push({x:cx0, w:bw, h:bh, win:win}); cx0 += bw + Math.round(rnd(2, 16));
+  }
+  for (i0 = 0; i0 < 16; i0++) pebbles.push({x:Math.random() * 900, y:GROUND + rnd(8, 42), w:rnd(6, 22)});
+
+  /* звуки */
+  function sfx(kind){
+    if (!soundBox.checked || !actx) return;
+    var t = actx.currentTime;
+    if (kind === 'jump') { tone(420, t, 0.09, 'square', 0.25); tone(640, t + 0.07, 0.1, 'square', 0.22); }
+    else if (kind === 'shoot') tone(980, t, 0.07, 'sawtooth', 0.25);
+    else if (kind === 'boom') { tone(150, t, 0.22, 'sawtooth', 0.6); tone(90, t + 0.05, 0.25, 'square', 0.4); }
+    else if (kind === 'hit') tone(110, t, 0.3, 'sawtooth', 0.7);
+  }
+  function burst(x, y, color, n){
+    for (var k = 0; k < n; k++) G.parts.push({x:x, y:y, vx:rnd(-220, 220), vy:rnd(-320, 60), life:rnd(0.35, 0.8), c:color, s:rnd(2, 5)});
+  }
+
+  /* действия */
+  function ducking(){ return (dino.keyDuck || dino.duckT > 0) && dino.y <= 0; }
+  function startGame(){
+    ensureAudio();
+    G.state = 'running'; G.t = 0; G.score = 0; G.lives = 3; G.spawned = 0; G.nextSpawn = 1.2;
+    G.obs = []; G.bullets = []; G.parts = []; G.pops = []; G.queued = null; G.inv = 0;
+    dino.y = 0; dino.vy = 0; dino.duckT = 0; dino.cd = 0;
+  }
+  function doJump(){ if (dino.y > 0) return; dino.vy = P().jump; dino.duckT = 0; sfx('jump'); }
+  function doDuck(){ dino.duckT = 1.1 + 110 / Math.max(120, G.speed); }
+  function doShoot(){
+    if (dino.cd > 0) return;
+    var low = ducking();
+    dino.cd = 0.28; dino.muzzle = 0.08;
+    G.bullets.push({x:dino.x + (low ? 80 : 60), y:GROUND - dino.y - (low ? 14 : 30)});
+    sfx('shoot');
+  }
+  function nearest(){
+    var best = null;
+    G.obs.forEach(function(o){ if (!o.dead && o.x + o.w > dino.x + 10 && (!best || o.x < best.x)) best = o; });
+    return best;
+  }
+  function jumpLead(){ var p = P(); return G.speed * p.jump / p.grav; }
+  /* Голос приходит с задержкой, поэтому сказанная заранее команда ждёт своего препятствия. */
+  function gameCommand(a, timed){
+    if (G.state !== 'running') {
+      if (G.state === 'over' && G.clock - G.overAt < 0.9) return;
+      startGame(); return;
+    }
+    var n = nearest();
+    if (a === 'jump') {
+      if (timed && n && n.type === 'cactus' && (n.x + n.w / 2) - (dino.x + 30) > jumpLead() + 6) G.queued = {a:'jump', o:n};
+      else doJump();
+    } else if (a === 'duck') {
+      if (!timed) return;                       // с клавиатуры приседание работает, пока держишь клавишу
+      if (n && n.type === 'ufo' && n.x - (dino.x + 72) > G.speed * 0.3) G.queued = {a:'duck', o:n};
+      else doDuck();
+    } else if (a === 'shoot') doShoot();
+  }
+
+  function spawn(){
+    var types = ['cactus', 'ufo', 'wall'], need = {cactus:'jump', ufo:'duck', wall:'shoot'};
+    if (G.voice) {                              // не выпускаем то, против чего в модели нет команды
+      var have = types.filter(function(t){ return mapping.indexOf(need[t]) !== -1; });
+      if (have.length) types = have;
+    }
+    var r = Math.random(), t = r < 0.45 ? 'cactus' : r < 0.75 ? 'ufo' : 'wall';
+    if (G.spawned < 2) t = 'cactus';
+    if (types.indexOf(t) === -1) t = types[Math.floor(Math.random() * types.length)];
+    var o = {type:t, x:GW + 30, w:30, h:0, dead:false, passed:false, hint:G.voice || G.spawned < 6};
+    if (t === 'cactus') { o.dbl = !G.voice && G.t > 12 && Math.random() < 0.3; o.w = o.dbl ? 58 : 30; o.h = Math.round(rnd(36, G.voice ? 46 : 54)); }
+    else if (t === 'wall') { o.w = 40; o.h = 175; }
+    G.obs.push(o); G.spawned++;
+  }
+  function hurt(o){
+    o.dead = true; G.lives--; G.inv = 1.3; G.shake = 0.3; G.queued = null;
+    burst(dino.x + 30, GROUND - dino.y - 30, '#ff6fae', 22); sfx('hit');
+    if (G.lives <= 0) {
+      G.state = 'over'; G.overAt = G.clock;
+      if (G.score > G.best) { G.best = Math.floor(G.score); try { localStorage.setItem('voiceHomeDinoBest', String(G.best)); } catch (e) {} }
+    }
+  }
+  function updParts(dt){
+    G.parts.forEach(function(p){ p.life -= dt; p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; });
+    G.parts = G.parts.filter(function(p){ return p.life > 0; });
+    G.pops.forEach(function(p){ p.life -= dt; p.y -= 40 * dt; });
+    G.pops = G.pops.filter(function(p){ return p.life > 0; });
+  }
+  function update(dt){
+    G.clock += dt;
+    G.shake = Math.max(0, G.shake - dt);
+    if (G.state !== 'running') { if (G.state === 'idle') G.dist += 40 * dt; updParts(dt); return; }
+    var p = P();
+    G.t += dt; G.speed = Math.min(p.vmax, p.v0 + G.t * p.acc); G.dist += G.speed * dt; G.score += dt * 12;
+    G.inv = Math.max(0, G.inv - dt); dino.cd = Math.max(0, dino.cd - dt);
+    dino.muzzle = Math.max(0, dino.muzzle - dt); dino.duckT = Math.max(0, dino.duckT - dt);
+
+    if (G.queued) {
+      var q = G.queued, qo = q.o;
+      if (qo.dead || qo.x + qo.w < dino.x) G.queued = null;
+      else if (q.a === 'jump' && (qo.x + qo.w / 2) - (dino.x + 30) <= jumpLead()) { G.queued = null; doJump(); }
+      else if (q.a === 'duck' && qo.x - (dino.x + 72) <= G.speed * 0.3) { G.queued = null; doDuck(); }
+    }
+    if (dino.y > 0 || dino.vy > 0) {
+      if (dino.keyDuck) dino.vy -= 3200 * dt;   // «вниз» в воздухе ускоряет приземление
+      dino.vy -= p.grav * dt; dino.y += dino.vy * dt;
+      if (dino.y <= 0) { dino.y = 0; dino.vy = 0; burst(dino.x + 26, GROUND, '#9aa0c9', 5); }
+    }
+    G.nextSpawn -= dt;
+    if (G.nextSpawn <= 0) { spawn(); G.nextSpawn = rnd(p.gapMin, p.gapMax); }
+
+    var low = ducking(), L = dino.x + (low ? 6 : 12), R = dino.x + (low ? 72 : 48), lo = dino.y, hi = dino.y + (low ? 27 : 56);
+    G.obs.forEach(function(o){
+      o.x -= G.speed * dt;
+      if (!o.passed && o.x + o.w < dino.x) { o.passed = true; G.score += 10; }
+      if (o.x + o.w < -60) o.dead = true;
+      if (o.dead || G.inv > 0 || G.state !== 'running') return;
+      var pad = o.type === 'cactus' ? 4 : o.type === 'ufo' ? 2 : 0;
+      if (R <= o.x + pad || L >= o.x + o.w - pad) return;
+      if (o.type === 'cactus' ? lo < o.h - 4 : o.type === 'ufo' ? hi > 40 : true) hurt(o);
+    });
+    G.bullets.forEach(function(b){
+      b.x += 900 * dt; if (b.x > GW + 20) b.dead = true;
+      G.obs.forEach(function(o){
+        if (b.dead || o.dead || o.type === 'ufo') return;
+        if (b.x + 14 < o.x || b.x > o.x + o.w || b.y < GROUND - o.h) return;
+        b.dead = true;
+        if (o.type === 'wall') {
+          o.dead = true; G.score += 50; G.shake = 0.15; sfx('boom');
+          burst(o.x + 20, GROUND - 90, '#ff6fae', 26); burst(o.x + 20, GROUND - 40, '#ffc857', 16);
+          G.pops.push({x:o.x + 20, y:GROUND - 185, text:'+50', life:0.9});
+        } else burst(b.x + 10, b.y, '#6ee7a0', 5);
+      });
+    });
+    G.obs = G.obs.filter(function(o){ return !o.dead; });
+    G.bullets = G.bullets.filter(function(b){ return !b.dead; });
+    updParts(dt);
+  }
+
+  /* рисование */
+  function rr(x, y, w, h, r){
+    g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  }
+  function pill(text, cx, cy, color){
+    g.font = '800 13px Manrope, system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    var w = g.measureText(text).width + 18;
+    rr(cx - w / 2, cy - 11, w, 22, 11); g.fillStyle = 'rgba(13,14,26,.82)'; g.fill();
+    g.lineWidth = 1.5; g.strokeStyle = color; g.stroke();
+    g.fillStyle = '#eef0ff'; g.fillText(text, cx, cy + 1);
+  }
+  function drawCactus(x, h){
+    rr(x + 9, GROUND - h, 12, h, 5); g.fill();
+    rr(x, GROUND - h * 0.72, 6, h * 0.34, 3); g.fill(); g.fillRect(x + 2, GROUND - h * 0.44, 10, 5);
+    rr(x + 24, GROUND - h * 0.9, 6, h * 0.36, 3); g.fill(); g.fillRect(x + 18, GROUND - h * 0.6, 10, 5);
+  }
+  var SKY = [['#0b0d2a', '#3a2278'], ['#2a1b5e', '#c2507f'], ['#0d2350', '#2f8fa8']];
+  function wrapX(x, off, tile){ var v = x - (off % tile); return v < -80 ? v + tile : v; }
+  function draw(){
+    var k, x, pal = SKY[Math.floor(G.score / 400) % 3], sh = G.shake > 0 ? (Math.random() - 0.5) * 8 : 0;
+    g.save(); g.translate(sh, sh * 0.5);
+    var grd = g.createLinearGradient(0, 0, 0, GROUND); grd.addColorStop(0, pal[0]); grd.addColorStop(1, pal[1]);
+    g.fillStyle = grd; g.fillRect(-10, -10, GW + 20, GH + 20);
+
+    g.fillStyle = '#fff';
+    stars.forEach(function(s){ g.globalAlpha = 0.35 + 0.5 * Math.abs(Math.sin(G.clock * 1.5 + s.ph)); g.beginPath(); g.arc(s.x, s.y, s.r, 0, 6.3); g.fill(); });
+    g.globalAlpha = 1;
+    g.shadowColor = '#fdf3c4'; g.shadowBlur = 30; g.fillStyle = '#fdf3c4'; g.beginPath(); g.arc(735, 62, 26, 0, 6.3); g.fill(); g.shadowBlur = 0;
+    g.fillStyle = '#e6d99a'; g.beginPath(); g.arc(726, 55, 6, 0, 6.3); g.arc(744, 70, 4, 0, 6.3); g.fill();
+
+    var off = G.dist * 0.06;                                    // дальние горы
+    g.fillStyle = 'rgba(24,27,72,.9)'; g.beginPath(); g.moveTo(-12, GROUND);
+    for (x = -12; x <= GW + 12; x += 12) g.lineTo(x, 196 - 46 * Math.abs(Math.sin((x + off) * 0.006)) - 16 * Math.sin((x + off) * 0.017 + 1));
+    g.lineTo(GW + 12, GROUND); g.fill();
+
+    off = G.dist * 0.25;                                        // город
+    city.forEach(function(b){
+      var bx = wrapX(b.x, off, cx0); if (bx > GW) return;
+      g.fillStyle = '#10122c'; g.fillRect(bx, GROUND - b.h, b.w, b.h);
+      g.fillStyle = 'rgba(255,200,87,.75)';
+      var n = 0;
+      for (var wy = GROUND - b.h + 8; wy < GROUND - 10; wy += 12) for (var wx = bx + 6; wx < bx + b.w - 8; wx += 10) { if (b.win[n++ % 40]) g.fillRect(wx, wy, 4, 5); }
+    });
+
+    g.fillStyle = '#0e0f22'; g.fillRect(-10, GROUND, GW + 20, GH - GROUND + 10);
+    g.fillStyle = '#2c315a';
+    pebbles.forEach(function(p){ g.fillRect(wrapX(p.x, G.dist, 980), p.y, p.w, 3); });
+    g.shadowColor = '#8b7bff'; g.shadowBlur = 12; g.fillStyle = '#8b7bff'; g.fillRect(-10, GROUND, GW + 20, 3); g.shadowBlur = 0;
+
+    G.obs.forEach(function(o){
+      if (o.type === 'cactus') {
+        g.shadowColor = '#3ddc97'; g.shadowBlur = 10; g.fillStyle = '#2fbf8a';
+        drawCactus(o.x, o.h); if (o.dbl) drawCactus(o.x + 28, o.h * 0.82);
+        g.shadowBlur = 0;
+        if (o.hint) pill('ПРЫГ', o.x + o.w / 2, GROUND - o.h - 20, '#6ee7a0');
+      } else if (o.type === 'ufo') {
+        var cx = o.x + 15, wob = Math.sin(G.clock * 6 + o.x * 0.01) * 2;
+        var bg = g.createLinearGradient(0, 60, 0, GROUND - 40); bg.addColorStop(0, 'rgba(75,225,236,.65)'); bg.addColorStop(1, 'rgba(75,225,236,.18)');
+        g.fillStyle = bg; g.beginPath(); g.moveTo(cx - 8, 58 + wob); g.lineTo(cx + 8, 58 + wob); g.lineTo(cx + 17, GROUND - 40); g.lineTo(cx - 17, GROUND - 40); g.fill();
+        g.shadowColor = '#4be1ec'; g.shadowBlur = 14; g.fillStyle = '#bff6fa'; g.fillRect(cx - 17, GROUND - 42, 34, 3); g.shadowBlur = 0;
+        g.fillStyle = '#4be1ec'; g.beginPath(); g.arc(cx, 46 + wob, 14, Math.PI, 0); g.fill();
+        g.fillStyle = '#c9cbe8'; g.beginPath(); g.ellipse(cx, 50 + wob, 36, 10, 0, 0, 6.3); g.fill();
+        for (k = -2; k <= 2; k++) { g.fillStyle = (Math.floor(G.clock * 6) + k) % 2 ? '#ff6fae' : '#ffc857'; g.beginPath(); g.arc(cx + k * 13, 52 + wob, 2.5, 0, 6.3); g.fill(); }
+        if (o.hint) pill('ВНИЗ', cx, 150, '#4be1ec');
+      } else {
+        var top = GROUND - o.h;
+        rr(o.x, top, o.w, o.h, 7); g.fillStyle = '#2a1d5e'; g.fill();
+        g.shadowColor = '#ff6fae'; g.shadowBlur = 12; g.lineWidth = 3; g.strokeStyle = '#ff6fae'; g.stroke(); g.shadowBlur = 0;
+        g.fillStyle = '#ff4d6d'; g.beginPath(); g.arc(o.x + 20, top + 30, 9, 0, 6.3); g.fill();
+        g.fillStyle = '#fff'; g.beginPath(); g.arc(o.x + 17, top + 28, 3, 0, 6.3); g.fill();
+        g.fillStyle = '#ff6fae';
+        for (k = 0; k < 4; k++) g.fillRect(o.x + 8, top + 60 + k * 26, 24, 4);
+        if (o.hint) pill('ОГОНЬ', o.x + 20, top - 18, '#ff6fae');
+      }
+    });
+
+    g.shadowColor = '#ffc857'; g.shadowBlur = 12;
+    G.bullets.forEach(function(b){ g.fillStyle = 'rgba(255,111,174,.5)'; g.fillRect(b.x - 22, b.y - 1, 24, 3); g.fillStyle = '#ffe08a'; rr(b.x, b.y - 3, 16, 6, 3); g.fill(); });
+    g.shadowBlur = 0;
+
+    var low = ducking(), fr = Math.floor(G.clock * (G.state === 'running' ? 10 : 5)) % 2;
+    var img = low ? DUCK[fr] : RUN[dino.y > 0 ? 0 : fr], dy = GROUND - dino.y - img.height;
+    if (!(G.inv > 0 && Math.floor(G.clock * 14) % 2)) {
+      g.shadowColor = '#6ee7a0'; g.shadowBlur = 12; g.drawImage(img, dino.x, dy); g.shadowBlur = 0;
+      g.fillStyle = '#ff6fae'; if (low) g.fillRect(dino.x + 66, dy + 15, 14, 5); else g.fillRect(dino.x + 40, dy + 27, 20, 5);
+      if (dino.muzzle > 0) { g.fillStyle = '#fff3c4'; g.beginPath(); g.arc(dino.x + (low ? 84 : 64), GROUND - dino.y - (low ? 12 : 28), 9, 0, 6.3); g.fill(); }
+    }
+    if (G.queued) pill(G.queued.a === 'jump' ? 'жду: прыг' : 'жду: вниз', dino.x + 30, dy - 16, '#ffc857');
+
+    G.parts.forEach(function(p){ g.globalAlpha = Math.min(1, p.life * 2.5); g.fillStyle = p.c; g.fillRect(p.x, p.y, p.s, p.s); });
+    g.globalAlpha = 1;
+    g.textAlign = 'center'; g.font = '800 20px Unbounded, Manrope, sans-serif'; g.fillStyle = '#ffc857';
+    G.pops.forEach(function(p){ g.globalAlpha = Math.min(1, p.life * 2); g.fillText(p.text, p.x, p.y); });
+    g.globalAlpha = 1;
+    g.restore();
+
+    g.textBaseline = 'alphabetic';
+    g.textAlign = 'left'; g.font = '800 22px Manrope, system-ui, sans-serif';
+    for (k = 0; k < 3; k++) { g.fillStyle = k < G.lives ? '#ff6fae' : 'rgba(255,255,255,.18)'; g.fillText('♥', 16 + k * 24, 32); }
+    g.textAlign = 'right'; g.fillStyle = '#eef0ff'; g.font = '800 22px Unbounded, Manrope, sans-serif';
+    g.fillText(('00000' + Math.floor(G.score)).slice(-5), GW - 16, 34);
+    g.font = '600 13px Manrope, system-ui, sans-serif'; g.fillStyle = '#c9cbe8'; g.fillText('рекорд ' + G.best, GW - 16, 54);
+
+    if (G.state !== 'running') {
+      g.fillStyle = 'rgba(13,14,26,.55)'; g.fillRect(0, 0, GW, GH);
+      g.textAlign = 'center'; g.fillStyle = '#eef0ff'; g.shadowColor = '#4be1ec'; g.shadowBlur = 18;
+      g.font = '800 36px Unbounded, Manrope, sans-serif';
+      g.fillText(G.state === 'over' ? 'ИГРА ОКОНЧЕНА' : 'ДИНО-БЛАСТЕР', GW / 2, 128); g.shadowBlur = 0;
+      g.font = '600 18px Manrope, system-ui, sans-serif';
+      if (G.state === 'over') { g.fillStyle = '#ffc857'; g.fillText('Счёт ' + Math.floor(G.score) + '  ·  рекорд ' + G.best, GW / 2, 162); }
+      g.fillStyle = '#c9cbe8';
+      g.fillText(listening ? 'Скажи «прыг», чтобы начать' : 'Нажми пробел или кнопку «Прыг», чтобы начать', GW / 2, G.state === 'over' ? 192 : 166);
+    }
+  }
+  var lastTs = 0;
+  function frame(ts){
+    var dt = Math.min(0.05, (ts - lastTs) / 1000 || 0); lastTs = ts;
+    roomTick(dt);
+    if (gameVisible) { update(dt); draw(); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  if ('IntersectionObserver' in window) new IntersectionObserver(function(en){ gameVisible = en[0].isIntersecting; }, {threshold:0.15}).observe(cv);
+
+  /* управление: клавиатура, кнопки, касание */
+  var KEYS = {Space:'jump', ArrowUp:'jump', KeyW:'jump', ArrowDown:'duck', KeyS:'duck', KeyF:'shoot', KeyX:'shoot', ArrowRight:'shoot'};
+  document.addEventListener('keydown', function(e){
+    var a = KEYS[e.code], tag = e.target && e.target.tagName;
+    if (!a || !gameVisible || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (tag === 'BUTTON') { if (G.state !== 'running') return; e.target.blur(); }
+    e.preventDefault();
+    if (a === 'duck') dino.keyDuck = true;
+    if (!e.repeat) gameCommand(a, false);
+  });
+  document.addEventListener('keyup', function(e){ if (KEYS[e.code] === 'duck') dino.keyDuck = false; });
+  window.addEventListener('blur', function(){ dino.keyDuck = false; });
+  cv.addEventListener('pointerdown', function(e){ e.preventDefault(); gameCommand('jump', false); });
+  Array.prototype.forEach.call(document.querySelectorAll('.pad'), function(b){
+    var a = b.dataset.act;
+    b.addEventListener('pointerdown', function(e){ e.preventDefault(); if (a === 'duck') dino.keyDuck = true; gameCommand(a, false); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function(ev){ b.addEventListener(ev, function(){ if (a === 'duck') dino.keyDuck = false; }); });
+    b.addEventListener('click', function(e){ if (e.detail === 0) gameCommand(a, true); });   // нажатие с клавиатуры
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.pace button'), function(b){
+    b.addEventListener('click', function(){ setPace(b.dataset.pace === 'voice'); });
+  });
+
+  connectBtn.addEventListener('click', connect);
+  urlInput.addEventListener('keydown', function(e){ if (e.key === 'Enter') connect(); });
+  listenBtn.addEventListener('click', function(){ if (!recognizer) return; if (listening) stopListening(); else startListening(); });
+  thr.addEventListener('input', function(){ thrOut.textContent = thr.value + '%'; });
+
+  try { var saved = localStorage.getItem('voiceHomeModel'); if (saved) urlInput.value = saved; } catch (e) {}
+})();
+</script>
+</body>
+</html>
